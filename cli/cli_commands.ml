@@ -12,6 +12,12 @@ let string_normalize_fingerprint fpstr =
   in
     worker ~fpstr ~acclst:[] ((String.length fpstr)-1)
 
+let rec drop x l =
+  match x, l with
+  | 0, xs -> xs
+  | n, _ :: xs -> drop (pred n) xs
+  | _, [] -> []
+
 type command = {
   name : string ;
   command_line : string ;
@@ -74,6 +80,8 @@ let _ =
   new_command
     "otr" "/otr [argument]" "manages OTR session by argument -- one of 'start' 'stop' or 'info'"
     [ "start" ; "stop" ; "info" ] ;
+  new_command
+    "scroll" "/scroll [text to match]" "scrolls to the last occurrence of a given string (from the current line first, from the bottom if no matches are found). /scroll with no arguments resets scrolling" [] ;
   new_command
     "smp" "/smp [argument]" "manages SMP session by argument -- one of 'start' 'answer' or 'abort'"
     [ "start" ; "answer" ; "abort" ] ;
@@ -322,6 +330,37 @@ let handle_own_otr_info dump config =
   let otr_fp = Otr.Utils.own_fingerprint config.Config.otr_config in
   dump ("own otr fingerprint: " ^ (User.format_fp (User.hex_fingerprint otr_fp)))
 
+
+let handle_scroll user arg =
+  match arg with
+  | None ->
+    0 (* no argument passed; reset scrolling *)
+  | Some match_text ->
+    let find_from_index idx =
+      List.fold_left
+      (fun (i, found) -> fun m ->
+        if found then (i, found)
+        else
+          let open Str in
+          try let _ =
+            search_forward (regexp_string match_text) m.User.message 0
+          in (i, true) (* found a matching line *)
+          with Not_found -> (i+1, false) (* +1 increments line counter*)
+      )
+      (idx, false)
+      (drop idx user.User.message_history)
+    in
+      let current_scrollback = user.User.scrollback in
+      let new_scrollback, found = find_from_index (current_scrollback + 1) in
+      if found
+        then new_scrollback
+      else
+        match find_from_index 0 with
+        | new_scrollback, true ->
+          new_scrollback
+        | _, false ->
+          current_scrollback
+
 let common_info dump user cfgdir =
   dump "jid" user.User.jid ;
   ( match user.User.name with
@@ -554,6 +593,12 @@ let exec ?out input state config log redraw =
       | Some a when a = "on"  -> handle_log state.users dump contact true a ; return_unit
       | Some a when a = "off" -> handle_log state.users dump contact false a ; return_unit
       | Some _ -> handle_help (msg ~prefix:"unknown argument") (Some "log") )
+
+  | ("scroll", arg) ->
+    let new_scrollback : int = handle_scroll contact arg in
+    let user = { contact with User.scrollback = new_scrollback } in
+      User.Users.replace state.users user.User.jid user
+    ; return_unit
 
   | ("info", _) ->
     ( if self then

@@ -23,7 +23,6 @@ type ui_state = {
 
   mutable show_offline        : bool                      ; (* F5 stuff *)
   mutable window_mode         : display_mode              ; (* F12 stuff *)
-  mutable scrollback          : int                       ; (* scroll-pgup/down state *)
 
   mutable last_status         : (User.direction * string) ; (* internal use only *)
 }
@@ -44,7 +43,6 @@ let empty_ui_state config_directory user resource users =
 
     show_offline        = true      ;
     window_mode         = BuddyList ;
-    scrollback          = 0         ;
 
     last_status                     ;
 }

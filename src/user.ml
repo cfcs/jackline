@@ -137,19 +137,24 @@ type user = {
   preserve_messages : bool ;
   message_history   : message list ; (* persistent if preserve_messages is true *)
   otr_fingerprints  : fingerprint list ;
-  active_sessions   : session list (* not persistent *)
+  active_sessions   : session list ; (* not persistent *)
+  scrollback        : int (* scroll-pgup/down state; not persistent *)
 }
 
 let new_user ~jid ?(name=None) ?(groups=[]) ?(subscription=`None) ?(otr_fingerprints=[]) ?(preserve_messages=false) ?(properties=[]) ?(active_sessions=[]) () =
   let message_history = [] in
-  { jid ; name ; groups ; subscription ; properties ; otr_fingerprints ; preserve_messages ; active_sessions ; message_history }
+  let scrollback      = 0  in
+  { jid ; name ; groups ; subscription ; properties ; otr_fingerprints ; preserve_messages ; active_sessions ; message_history; scrollback }
 
 let message direction encrypted received message =
   { direction ; encrypted ; received ;
     timestamp = Unix.time () ; message ; persistent = false }
 
 let insert_message u dir enc rcvd msg =
-  { u with message_history = (message dir enc rcvd msg) :: u.message_history }
+  { u with
+    message_history = (message dir enc rcvd msg) :: u.message_history
+  ; scrollback      = (if u.scrollback <> 0 then u.scrollback + 1 else 0) (* TODO line_wrap *)
+  }
 
 let encrypted = Otr.State.is_encrypted
 

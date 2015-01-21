@@ -382,7 +382,7 @@ let make_prompt size time network state redraw =
         in
         let scroll data =
           (* data is already in right order -- but we need to strip scrollback *)
-          let elements = drop (state.scrollback * main_size) (List.rev data) in
+          let elements = drop active.User.scrollback (List.rev data) in
           pad_l_rev "" main_size (List.rev elements)
         in
 
@@ -420,7 +420,7 @@ let make_prompt size time network state redraw =
         | BuddyList -> true
         | FullScreen | Raw -> false
       in
-      let hline = horizontal_line active active_session fg_color buddy_width state.scrollback showing_buddies size.cols in
+      let hline = horizontal_line active active_session fg_color buddy_width active.User.scrollback showing_buddies size.cols in
 
       let notify = List.length notifications > 0 in
       let log = active.User.preserve_messages in
@@ -461,19 +461,29 @@ let activate_user state active =
   if state.active_contact <> active then
     (state.last_active_contact <- state.active_contact ;
      state.active_contact      <- active ;
-     state.scrollback          <- 0 ;
-     state.notifications       <- List.filter (fun a -> a <> active) state.notifications ;
+     state.notifications       <- List.filter (fun a ->
+          (a <> active)
+       || ((User.Users.find state.users a).User.scrollback <> 0))
+       state.notifications ;
      state.window_mode         <- BuddyList ;
      force_redraw ())
 
 let navigate_message_buffer state direction =
-  match
-    direction,
-    state.scrollback
-  with
-  | Down, 0 -> ()
-  | Down, n -> state.scrollback <- n - 1 ; force_redraw ()
-  | Up, n -> state.scrollback <- n + 1; force_redraw ()
+  let active = User.Users.find state.users state.active_contact in
+  let update_user state u = User.Users.replace state.users u.User.jid u in
+  let new_scrollback = 
+    match
+      direction,
+      active.User.scrollback
+    with
+    | Down, 0 -> 0
+    | Down, n -> n - 1
+    | Up, n when n < List.length active.User.message_history
+      -> n + 1
+    | Up, n -> n
+  in
+    update_user state { active with User.scrollback = new_scrollback }
+  ; force_redraw ()
 
 let navigate_buddy_list state direction =
   let find u = User.Users.find state.users u in
