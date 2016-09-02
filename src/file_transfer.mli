@@ -16,8 +16,9 @@ module State : sig
     | Invalid_content
     | Unknown_request_id
       
-  val create : unit -> t
+  val empty : t
   val receive_offer_request : t -> Otr.Otrdata.offer_request -> t * bool
-  val receive_get_request : t -> string -> offer option
+  val receive_get_request : t -> string -> t * offer option
   val receive_response : t -> string -> string -> t * get_response_result
+  val make_offer : t -> request_id:string -> file_path:string -> hex_sha1:string -> file_length:int64 -> t * string
 end

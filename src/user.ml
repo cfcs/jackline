@@ -234,6 +234,7 @@ type user = {
   history_position  : int ; (* not persistent *)
   otr_fingerprints  : fingerprint list ;
   otr_custom_config : Otr.State.config option ;
+  otrdata_file_transfers : File_transfer.State.t ; (* not persistent *)
   active_sessions   : session list ; (* not persistent *)
   expand            : bool ; (* not persistent *)
   self              : bool ; (* not persistent *)
@@ -273,7 +274,7 @@ let info u s =
   in
   groups @ add @ sessions
 
-let new_user ~jid ?(name=None) ?(groups=[]) ?(subscription=`None) ?(otr_fingerprints=[]) ?(preserve_messages=false) ?(properties=[]) ?(active_sessions=[]) ?(otr_custom_config=None) () =
+let new_user ~jid ?(name=None) ?(groups=[]) ?(subscription=`None) ?(otr_fingerprints=[]) ?(preserve_messages=false) ?(properties=[]) ?(otrdata_file_transfers=File_transfer.State.empty) ?(active_sessions=[]) ?(otr_custom_config=None) () =
   let message_history = []
   and expand = false
   and self = false
@@ -281,7 +282,7 @@ let new_user ~jid ?(name=None) ?(groups=[]) ?(subscription=`None) ?(otr_fingerpr
   and readline_history = []
   and history_position = 0
   in
-  { bare_jid = jid ; name ; groups ; subscription ; properties ; otr_fingerprints ; preserve_messages ; active_sessions ; message_history ; input_buffer ; readline_history ; otr_custom_config ; expand ; self ; history_position }
+  { bare_jid = jid ; name ; groups ; subscription ; properties ; otr_fingerprints ; preserve_messages ; otrdata_file_transfers ; active_sessions ; message_history ; input_buffer ; readline_history ; otr_custom_config ; expand ; self ; history_position }
 
 let active_session user =
   let sorted = List.sort compare_session user.active_sessions

@@ -16,17 +16,20 @@ module State = struct
     ; missing_ranges : (int64 * int64) list
     ; sha1_hash : string
     }
+
   type offer =
     { remote_filename : string
     ; local_filename : string
     ; sha1 : string
     ; total_size : int64
     }
+
   type parsed_get_response =
     { filename : string
     ; offset : int64
     ; content : string
     }
+
   type get_response_result =
     | Get_response of parsed_get_response
     | Invalid_content
@@ -139,7 +142,12 @@ module State = struct
     let nif , to_send , complete = new_incomplete_files in
     {state with incomplete_files = nif} , to_send , complete
 
-  let create () = { sent_offers = [] ; received_offers = [] ; sent_requests = [] ; incomplete_files = [] }
+  let empty =
+    { sent_offers = []
+    ; received_offers = []
+    ; sent_requests = []
+    ; incomplete_files = []
+    }
 
   let receive_offer_request state (offer : Otr.Otrdata.offer_request) : t * bool =
      (* check if the offer is acceptable:
@@ -155,12 +163,13 @@ module State = struct
       (fun (offer : offer) -> offer.remote_filename)
       state.received_offers
 
-  let receive_get_request state filename : offer option =
+  let receive_get_request state filename : t * offer option =
     (* check if we have offered [filename] to this contact *)
     let rec find = function
-      | [] -> None
+      | [] -> state, None
       | (offer : offer) :: _ when offer.remote_filename = filename ->
-         Some offer
+         {state with received_offers = offer::state.received_offers}
+        , Some offer
       | _ :: tl -> find tl
     in
     find (state.sent_offers : offer list)
@@ -180,10 +189,25 @@ module State = struct
     (state
     , find_sent_get state.sent_requests)
 
-  let _ , _ , _ , _ , _ =
+  let make_offer state ~request_id ~file_path ~hex_sha1 ~file_length =
+    let offer =
+      { remote_filename = file_path
+      ; local_filename = file_path
+      ; sha1 = hex_sha1
+      ; total_size = file_length
+      }
+    in
+    {state with sent_offers = offer::state.sent_offers}
+    , Otr.Otrdata.make_otrdata_offer request_id file_path hex_sha1 file_length
+
+  let accept_offer state ~file_path =
+    (* TODO make state.incomplete_file entry and signal the caller to start calling next_get_request *)
+    let _ = file_path in
+    state
+
+  let _ , _  , _ =
     (next_get_request
-    , receive_offer_request
     , list_received_offers
-    , receive_get_request
-    , receive_response)
+    , accept_offer
+    )
 end

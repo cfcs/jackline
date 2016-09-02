@@ -123,6 +123,7 @@ type user = {
   history_position  : int ;
   otr_fingerprints  : fingerprint list ;
   otr_custom_config : Otr.State.config option ;
+  otrdata_file_transfers : File_transfer.State.t ; (* not persistent *)
   active_sessions   : session list ; (* not persistent *)
   expand            : bool ; (* not persistent *)
   self              : bool ; (* not persistent *)
@@ -135,6 +136,7 @@ val new_user : jid:Xjid.bare_jid ->
                ?otr_fingerprints:fingerprint list ->
                ?preserve_messages:bool ->
                ?properties:property list ->
+               ?otrdata_file_transfers:File_transfer.State.t ->
                ?active_sessions:session list ->
                ?otr_custom_config:Otr.State.config option ->
                unit ->

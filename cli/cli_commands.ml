@@ -164,7 +164,7 @@ let handle_help msg = function
     let cmds = String.concat " " (keys ()) in
     msg "available commands (/help [cmd])" cmds
 
-let notify_user jid ctx inc_fp verify_fp =
+let notify_user jid ctx inc_fp verify_fp ((user : User.user) , msgs) =
   let open Otr.Otrdata in
   function
   | `Established_encrypted_session ssid ->
@@ -191,53 +191,53 @@ let notify_user jid ctx inc_fp verify_fp =
        | _ when c = 0 && o -> "POSSIBLE BREAKIN ATTEMPT! new " ^ tos v ^ other o ^ verify
        | _ -> tos v ^ count c ^ other o ^ verify
      in
-     [ ((`Local (jid, "OTR")), false, ("encrypted connection established (ssid " ^ ssid ^ ")")) ;
-       ((`Local (jid, "OTR key")), false, otrmsg) ]
-  | `Warning w               -> [ ((`Local (jid, "OTR warning")), false, w) ]
-  | `Received_error e        -> [ ((`From jid), false, e) ]
-  | `Received m              -> [ ((`From jid), false, m) ]
-  | `Received_encrypted e    -> [ ((`From jid), true, e) ]
-  | `SMP_awaiting_secret     -> [ ((`Local (jid, "SMP")), false, "awaiting SMP secret, answer with /smp answer [secret]") ]
-  | `SMP_received_question q -> [ ((`Local (jid, "SMP")), false, ("received SMP question (answer with /smp answer [secret]) " ^ q)) ]
+     user , ((`Local (jid, "OTR")), false, ("encrypted connection established (ssid " ^ ssid ^ ")"))::((`Local (jid, "OTR key")), false, otrmsg)::msgs
+  | `Warning w               -> user , ((`Local (jid, "OTR warning")), false, w) ::msgs
+  | `Received_error e        -> user , ((`From jid), false, e)::msgs
+  | `Received m              -> user , ((`From jid), false, m)::msgs
+  | `Received_encrypted e    -> user , ((`From jid), true, e)::msgs
+  | `SMP_awaiting_secret     -> user , ((`Local (jid, "SMP")), false, "awaiting SMP secret, answer with /smp answer [secret]")::msgs
+  | `SMP_received_question q -> user , ((`Local (jid, "SMP")), false, ("received SMP question (answer with /smp answer [secret]) " ^ q))::msgs
   | `SMP_success             ->
      let raw_fp = match User.otr_fingerprint ctx with Some fp -> fp | _ -> assert false in
      verify_fp raw_fp ;
-     [ ((`Local (jid, "OTR SMP")), false, "successfully verified!") ]
-  | `SMP_failure             -> [ ((`Local (jid, "OTR SMP")), false, "failure") ]
+     user , ((`Local (jid, "OTR SMP")), false, "successfully verified!")::msgs
+  | `SMP_failure             ->
+     user , ((`Local (jid, "OTR SMP")), false, "failure")::msgs
 
   | `Otrdata_request (OFFER_request request) ->
-     let ft_state = File_transfer.State.create () in
      begin match
-       File_transfer.State.receive_offer_request ft_state request
+       File_transfer.State.receive_offer_request user.otrdata_file_transfers request
      with
      | _ , true ->
-        [ ((`Local (jid, "OTRDATA DEBUG")), false, "received good offer for Path:"^request.offer_path) ]
+        user , ((`Local (jid, "OTRDATA DEBUG")), false, "received good offer for Path:"^request.offer_path)::msgs
      | _ , false ->
-        [ ((`Local (jid, "OTRDATA DEBUG")), false, "received false offer for Path:"^request.offer_path) ]
+        user , ((`Local (jid, "OTRDATA DEBUG")), false, "received false offer for Path:"^request.offer_path)::msgs
      end
 
   | `Otrdata_request (GET_request request) ->
-     let ft_state = File_transfer.State.create () in
-     begin match File_transfer.State.receive_get_request ft_state request.path with
+     let ft_state , offer = File_transfer.State.receive_get_request
+                           user.otrdata_file_transfers request.path
+     in
+     let user = {user with otrdata_file_transfers = ft_state} in
+     begin match offer with
      | Some offer ->
         let _ = offer in
-        [ ((`Local (jid, "OTRDATA DEBUG")), false, "COOL GET FOR Path:"^request.path) ]
+        user , ((`Local (jid, "OTRDATA DEBUG")), false, "COOL GET FOR Path:"^ offer.remote_filename)::msgs
      | None ->
-        [ ((`Local (jid, "OTRDATA DEBUG")), false, "INVALID GET FOR Path:"^request.path) ]
+        user , ((`Local (jid, "OTRDATA DEBUG")), false, "INVALID GET FOR Path:"^request.path)::msgs
      end
 
   | `Otrdata_response (({status_line ; request_id; body} : response) as response) ->
-     let ft_state = File_transfer.State.create () in
-     let state , result = File_transfer.State.receive_response ft_state response.request_id response.body in
-     let _ = state in
+     let ft_state , result = File_transfer.State.receive_response user.otrdata_file_transfers response.request_id response.body in
+     let user = { user with otrdata_file_transfers = ft_state} in
      begin match result with
      | Invalid_content ->
-        [ ((`Local (jid, "OTRDATA DEBUG")), false, "Received INVALID LENGTH GET body: Status: "^status_line^" req: "^request_id^" body: "^body) ]
+        user , ((`Local (jid, "OTRDATA DEBUG")), false, "Received INVALID LENGTH GET body: Status: "^status_line^" req: "^request_id^" body: "^body)::msgs
      | Get_response req ->
-        let _ = req in
-        [ ((`Local (jid, "OTRDATA DEBUG")), false, "Received GET body: Status: "^status_line^" req: "^request_id^" body: "^body) ]
+        user , ((`Local (jid, "OTRDATA DEBUG")), false, "Received GET body: Filename: "^req.filename^" offset: "^(Int64.to_string req.offset)^" body: "^req.content)::msgs
      | Unknown_request_id ->
-        [ ((`Local (jid, "OTRDATA DEBUG")), false, "Received UNKNOWN ID GET body: Status: "^status_line^" req: "^request_id^" body: "^body) ]
+        user, ((`Local (jid, "OTRDATA DEBUG")), false, "Received UNKNOWN ID GET body: Status: "^status_line^" req: "^request_id^" body: "^body)::msgs
      end
 
 let handle_connect p c_mvar =
@@ -326,7 +326,11 @@ let handle_connect p c_mvar =
         let u = User.verify_fp user fp `SMP in
         Contact.replace_user state.contacts u
       in
-      let msgs = List.flatten (List.map (notify_user (`Full (bare, res)) ctx inc_fp verify_fp) ret) in
+      let user , msgs = List.fold_left
+                             (notify_user (`Full (bare, res)) ctx inc_fp verify_fp)
+                             (user , []) ret
+      in
+      Contact.replace_user state.contacts user ;
       let state, user = find_user state bare in
       let user, mark = List.fold_left
           (fun (u, n) (dir, enc, m) ->
@@ -740,10 +744,15 @@ let handle_otrdata_offer_u user session err filename =
   | None -> err "no active session"
   | Some session ->
      let request_id = "lol" in
-     let sha1 = "123" in
+     let hex_sha1 = "123" in
      let file_length = 20L in
-     let ctx, out, user_data = Otr.Engine.start_otrdata_offer session.User.otr request_id filename sha1 file_length in
-     let user = User.update_otr user session ctx in
+     let ft_state , serialized_offer =
+       File_transfer.State.make_offer user.User.otrdata_file_transfers
+                                ~request_id ~file_path:filename
+                                ~hex_sha1 ~file_length in
+     let user = {user with otrdata_file_transfers = ft_state} in
+     let ctx, out, user_data = Otr.Engine.start_otrdata_offer session.User.otr serialized_offer in
+     let _ = ctx in
      let datas, clos =
        begin match user_data , out with
        | _ , None -> ([], None)
