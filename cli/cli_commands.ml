@@ -87,6 +87,9 @@ let _ =
     "otr" "/otr [argument]" "manages OTR session by argument -- one of 'start' 'stop' or 'info'"
     (fun _ -> [ "start" ; "stop" ; "info" ]) ;
   new_command
+    "otrdata" "/otrdata [type] [filename]" "handle file transfers inside an OTR session, using the OTRDATA protocol -- one of 'offer' or 'get'"
+    [ "offer" ; "get" ] ;
+  new_command
     "smp" "/smp [argument]" "manages SMP session by argument -- one of 'shared [secret]', 'question [question]', 'answer' or 'abort'"
     (fun _ -> [ "shared" ; "question" ; "answer" ; "abort" ]) ;
   new_command
@@ -161,7 +164,9 @@ let handle_help msg = function
     let cmds = String.concat " " (keys ()) in
     msg "available commands (/help [cmd])" cmds
 
-let notify_user jid ctx inc_fp verify_fp = function
+let notify_user jid ctx inc_fp verify_fp =
+  let open Otr.Otrdata in
+  function
   | `Established_encrypted_session ssid ->
      let raw_fp = match User.otr_fingerprint ctx with Some fp -> fp | _ -> assert false in
      let otrmsg =
@@ -199,6 +204,41 @@ let notify_user jid ctx inc_fp verify_fp = function
      verify_fp raw_fp ;
      [ ((`Local (jid, "OTR SMP")), false, "successfully verified!") ]
   | `SMP_failure             -> [ ((`Local (jid, "OTR SMP")), false, "failure") ]
+
+  | `Otrdata_request (OFFER_request request) ->
+     let ft_state = File_transfer.State.create () in
+     begin match
+       File_transfer.State.receive_offer_request ft_state request
+     with
+     | _ , true ->
+        [ ((`Local (jid, "OTRDATA DEBUG")), false, "received good offer for Path:"^request.offer_path) ]
+     | _ , false ->
+        [ ((`Local (jid, "OTRDATA DEBUG")), false, "received false offer for Path:"^request.offer_path) ]
+     end
+
+  | `Otrdata_request (GET_request request) ->
+     let ft_state = File_transfer.State.create () in
+     begin match File_transfer.State.receive_get_request ft_state request.path with
+     | Some offer ->
+        let _ = offer in
+        [ ((`Local (jid, "OTRDATA DEBUG")), false, "COOL GET FOR Path:"^request.path) ]
+     | None ->
+        [ ((`Local (jid, "OTRDATA DEBUG")), false, "INVALID GET FOR Path:"^request.path) ]
+     end
+
+  | `Otrdata_response (({status_line ; request_id; body} : response) as response) ->
+     let ft_state = File_transfer.State.create () in
+     let state , result = File_transfer.State.receive_response ft_state response.request_id response.body in
+     let _ = state in
+     begin match result with
+     | Invalid_content ->
+        [ ((`Local (jid, "OTRDATA DEBUG")), false, "Received INVALID LENGTH GET body: Status: "^status_line^" req: "^request_id^" body: "^body) ]
+     | Get_response req ->
+        let _ = req in
+        [ ((`Local (jid, "OTRDATA DEBUG")), false, "Received GET body: Status: "^status_line^" req: "^request_id^" body: "^body) ]
+     | Unknown_request_id ->
+        [ ((`Local (jid, "OTRDATA DEBUG")), false, "Received UNKNOWN ID GET body: Status: "^status_line^" req: "^request_id^" body: "^body) ]
+     end
 
 let handle_connect p c_mvar =
   let find_user state bare =
@@ -695,6 +735,54 @@ let handle_otr_stop user session err =
     in
     (datas, Some user, clos)
 
+let handle_otrdata_offer_u user session err filename =
+  begin match session with
+  | None -> err "no active session"
+  | Some session ->
+     let request_id = "lol" in
+     let sha1 = "123" in
+     let file_length = 20L in
+     let ctx, out, user_data = Otr.Engine.start_otrdata_offer session.User.otr request_id filename sha1 file_length in
+     let user = User.update_otr user session ctx in
+     let datas, clos =
+       begin match user_data , out with
+       | _ , None -> ([], None)
+       | _ , Some body ->
+          let clos state s =
+            let jid = `Full (user.User.bare_jid, session.User.resource) in
+            send s (Some session) jid None body >|= fun () ->
+            `Ok state
+          in
+          (["Offered '"^filename^"'"], Some clos)
+       end
+     in
+     (datas, Some user, clos)
+  end
+
+let handle_otrdata_get_u user session err filename =
+  begin match session with
+  | None -> err "no active session"
+  | Some session ->
+     let request_id = "lol" in (* TODO generate random string *)
+     let byte_range = (0L , 0x100L) in (* TODO remove hardcoded limit *)
+     let ctx, out , notifications_to_user = Otr.Engine.start_otrdata_get session.User.otr request_id filename byte_range in
+     let user = User.update_otr user session ctx in
+     let datas , clos =
+       begin match notifications_to_user , out with
+       | `Warning errmsg , _ -> (["OTRDATA warning: " ^ errmsg] , None)
+       | _ , None      -> ([], None)
+       | _ , Some body ->
+          let clos state s =
+            let jid = `Full (user.User.bare_jid, session.User.resource) in
+            send s (Some session) jid None body >|= fun () ->
+            `Ok state
+          in
+          (["Asked for '"^filename^"'"], Some clos)
+       end
+     in
+     (datas, Some user, clos)
+  end
+
 let handle_smp_abort user session =
   let ctx, out, ret = Otr.Engine.abort_smp session.User.otr in
   let user = User.update_otr user session ctx in
@@ -1092,6 +1180,22 @@ let exec input state contact isself p =
                  handle_otr_stop u (session state) err)
 
          | ("otr", Some _), _ -> handle_help (msg ~prefix:"unknown argument") (Some "otr")
+
+         | ("otrdata", Some args), Some _ ->
+            need_user
+              (fun u ->
+                if isself then
+                  err "do not like to talk to myself"
+                else
+                  begin match split_ws args with
+                  | "offer" , Some filename ->
+                     handle_otrdata_offer_u u (session state) err filename
+                  | "get" , Some filename ->
+                     handle_otrdata_get_u u (session state) err filename
+                  | _ ->
+                     err "Usage: /otrdata <offer|get> <filename>"
+                  end
+              )
 
          | ("smp", _), _ when isself -> err "do not like to talk to myself"
          | ("smp", None), _ -> handle_help (msg ~prefix:"argument required") (Some "smp")
